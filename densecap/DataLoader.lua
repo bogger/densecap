@@ -107,6 +107,7 @@ function DataLoader:decodeSequence(seq)
   local D,N = seq:size(1), seq:size(2)
   local out = {}
   local itow = self.info.idx_to_token
+
   for i=1,N do
     local txt = ''
     for j=1,D do
@@ -125,6 +126,37 @@ function DataLoader:decodeSequence(seq)
   return out
 end
 
+--[[
+Decodes a sequence into a table of strings
+
+Inputs:
+- seq: tensor of shape N x T
+
+Returns:
+- captions: Array of N strings
+--]]
+function DataLoader:decodeSequence2(seq)
+  local N, T = seq:size(1), seq:size(2)
+  local out = {}
+  local itow = self.info.idx_to_token
+  
+  for i=1,N do
+    local txt = ''
+    for j=1,T do
+      local ix = seq[{i,j}]
+      if ix >= 1 and ix <= self.vocab_size then
+        -- a word, translate it
+        if j >= 2 then txt = txt .. ' ' end -- space
+        txt = txt .. itow[ix]
+      else
+        -- END token
+        break
+      end
+    end
+    table.insert(out, txt)
+  end
+  return out
+end
 -- split is an integer: 0 = train, 1 = val, 2 = test
 function DataLoader:resetIterator(split)
   assert(split == 0 or split == 1 or split == 2, 'split must be integer, either 0 (train), 1 (val) or 2 (test)')

@@ -1,10 +1,8 @@
-
+require 'image'
 local cjson = require 'cjson'
 local utils = require 'densecap.utils'
 local box_utils = require 'densecap.box_utils'
-
 local eval_utils = {}
-
 
 --[[
 Evaluate a DenseCapModel on a split of data from a DataLoader.
@@ -90,6 +88,108 @@ function eval_utils.eval_split(kwargs)
   return out
 end
 
+function eval_utils.eval_split_from_file(kwargs)
+-- local model = utils.getopt(kwargs, 'model')
+  local res_file =utils.getopt(kwargs, 'res_json')
+  local vis=utils.getopt(kwargs, 'vis')
+  local output_vis_dir = utils.getopt(kwargs, 'output_vis_dir')
+  local loader = utils.getopt(kwargs, 'loader')
+  local split = utils.getopt(kwargs, 'split', 'val')
+  local max_images = utils.getopt(kwargs, 'max_images', -1)
+--  local id = utils.getopt(kwargs, 'id', '')
+  local dtype = utils.getopt(kwargs, 'dtype', 'torch.FloatTensor')
+  assert(split == 'val' or split == 'test', 'split must be "val" or "test"')
+  local split_to_int = {val=1, test=2}
+  split = split_to_int[split]
+  print('using split ', split)
+  local vgg_mean = torch.FloatTensor{103.939, 116.779, 123.68}:view(1,3,1,1) -- BGR order
+
+--  model:evaluate()
+  loader:resetIterator(split)
+  local evaluator = DenseCaptioningEvaluator{id=id}
+
+  local counter = 0
+  local all_losses = {}
+  -- loading from file
+  local result_all = utils.read_json(res_file)
+
+  local results_json = {}
+
+  while true do
+    
+    
+    -- Grab a batch of data and convert it to the right dtype
+    local data = {}
+    local loader_kwargs = {split=split, iterate=true}
+    local img, gt_boxes, gt_labels, info, _ = loader:getBatch(loader_kwargs)
+
+    img:add(vgg_mean:expandAs(img)) -- add the substracted mean
+    img:mul(1.0/255) -- rescale to [0,1]
+    img =img[1]
+    -- change to rgb channels
+    local r_ch = img[{3,{},{}}]:clone()
+    img[{3,{},{}}] = img[{1,{},{}}]
+    img[{1,{},{}}] = r_ch
+    info = info[1] -- Since we are only using a single image
+    frac = info['width'] / info['ori_width']
+    -- Call forward_backward to compute losses
+    -- Read results from pre-saved file
+    -- check existency of image in pre-saved result, skip if not
+    if result_all[info.filename] ~= nil then 
+      counter = counter + 1
+      result = result_all[info.filename]
+      local boxes = torch.Tensor(result['boxes']):type(dtype) 
+      boxes = box_utils.x1y1x2y2_to_xcycwh(boxes)
+      -- rescale boxes to the size of preprocessed images
+      boxes:mul(frac) 
+      local logprobs = torch.Tensor(result['logprobs']):type(dtype)
+      local captions = result['captions']
+      --print(gt_labels[1])
+      local gt_captions = loader:decodeSequence2(gt_labels[1])
+      --print(gt_boxes[1])
+      --print(#gt_captions)
+      evaluator:addResult(logprobs, boxes, captions, gt_boxes[1], gt_captions)
+      if vis == 1 then
+        -- save the raw image to vis/data/
+        local img_out_path = paths.concat(output_vis_dir, info.filename)
+        image.save(img_out_path, img)
+        -- keep track of the (thin) json information with all result metadata
+        local result_vis = {}
+        result_vis['boxes'] = box_utils.xcycwh_to_xywh(boxes)
+        --result_vis['scores'] = torch.Tensor(logprobs:size(1),2):type(dtype):zero()
+        --result_vis['scores'][{{},1}] = logprobs
+        result_vis['scores'] = logprobs
+        result_vis['captions'] = captions
+        local result_json = result_to_json(result_vis)
+        result_json.img_name = info.filename
+        table.insert(results_json, result_json)
+      end
+      -- Print a message to the console
+      local msg = 'Processed image %s (%d / %d) of split %d, detected %d regions'
+      local num_images = info.split_bounds[2]
+      if max_images > 0 then num_images = math.min(num_images, max_images) end
+      local num_boxes = boxes:size(1)
+      print(string.format(msg, info.filename, counter, num_images, split, num_boxes))
+    end
+    -- Break out if we have processed enough images
+    if max_images > 0 and counter >= max_images then break end
+    if info.split_bounds[1] == info.split_bounds[2] then break end
+  end
+  if #results_json > 0 then
+    -- serialize to json
+    local vis_out = {}
+    vis_out.results = results_json
+    utils.write_json(paths.concat(output_vis_dir,'results.json'), vis_out)
+  end
+  
+  local ap_results = evaluator:evaluate()
+  print(string.format('mAP: %f', 100 * ap_results.map))
+  collectgarbage()
+  local out = {
+    ap_results=ap_results,
+  }
+  return out
+end
 
 function eval_utils.score_captions(records)
   -- serialize records to json file
@@ -101,6 +201,14 @@ function eval_utils.score_captions(records)
   return blob
 end
 
+--added for visualization
+function result_to_json(result)
+  local out = {}
+  out.boxes = result.boxes:float():totable()
+  out.scores = result.scores:float():view(-1):totable()
+  out.captions = result.captions
+  return out
+end
 
 local function pluck_boxes(ix, boxes, text)
   -- ix is a list (length N) of LongTensors giving indices to boxes/text. Use them to do merge
@@ -157,7 +265,9 @@ function DenseCaptioningEvaluator:addResult(logprobs, boxes, text, target_boxes,
 
   -- make sure we're on CPU
   boxes = boxes:float()
-  logprobs = logprobs[{ {}, 1 }]:double() -- grab the positives class (1)
+  if logprobs:nDimension() > 1 then
+    logprobs = logprobs[{ {}, 1 }]:double() -- grab the positives class (1)
+  end
   target_boxes = target_boxes:float()
 
   -- merge ground truth boxes that overlap by >= 0.7
