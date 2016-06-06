@@ -23,7 +23,7 @@ cmd:option('-split', 'val', 'Which split to evaluate; either val or test.')
 cmd:option('-max_images', -1, 'How many images to evaluate; -1 for whole split')
 cmd:option('-rpn_nms_thresh', 0.7)
 cmd:option('-final_nms_thresh', 0.3)
-cmd:option('-num_proposals', 1000)
+cmd:option('-num_proposals', 300)
 local opt = cmd:parse(arg)
 
 
