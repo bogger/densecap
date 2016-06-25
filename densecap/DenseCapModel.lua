@@ -185,7 +185,7 @@ Input: Table with the following keys:
 function DenseCapModel:setTestArgs(kwargs)
   self.nets.localization_layer:setTestArgs{
     nms_thresh = utils.getopt(kwargs, 'rpn_nms_thresh', 0.7),
-    max_proposals = utils.getopt(kwargs, 'num_proposals', 300)
+    max_proposals = utils.getopt(kwargs, 'num_proposals', 1000)
   }
   self.opt.final_nms_thresh = utils.getopt(kwargs, 'final_nms_thresh', 0.3)
 end
